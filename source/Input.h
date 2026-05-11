@@ -9,6 +9,7 @@ enum class Action {
     MoveDown,
     Rotate,
     HardDrop,
+    Pause,
     Quit,
     Restart,     // only available in GameOver state
 };

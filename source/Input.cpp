@@ -25,13 +25,14 @@ Action Input::readKey()
         }
     }
 
-    // WASD keys
+    // Regular keys
     switch (ch) {
         case 'a': case 'A':  return Action::MoveLeft;
         case 'd': case 'D':  return Action::MoveRight;
         case 's': case 'S':  return Action::MoveDown;
         case 'w': case 'W':  return Action::Rotate;
         case ' ':            return Action::HardDrop;   // Space
+        case 'p': case 'P':  return Action::Pause;
         case 'r': case 'R':  return Action::Restart;
         case 'q': case 'Q':  return Action::Quit;
         case 27:             return Action::Quit;       // Escape

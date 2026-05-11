@@ -1,21 +1,86 @@
 #include "Game.h"
 #include <thread>
+#include <fstream>
+#include <cstdio>
 
 Game::Game()
     : running(false)
     , gameOver(false)
+    , paused(false)
     , score(0)
+    , highScore(0)
     , lines(0)
     , level(1)
     , fallInterval(calcFallInterval())
     , lastFallTime(Clock::now())
+    , pauseStartTime(Clock::now())
     , rng(std::random_device{}())
 {
+    loadHighScore();
 }
 
 Game::~Game()
 {
     renderer.shutdown();
+}
+
+void Game::loadHighScore()
+{
+    std::ifstream file(HIGH_SCORE_FILE);
+    if (!file.is_open()) {
+        highScore = 0;
+        return;
+    }
+
+    std::string content((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+    file.close();
+
+    auto pos = content.find("\"highScore\"");
+    if (pos != std::string::npos) {
+        auto colon = content.find(':', pos);
+        if (colon != std::string::npos) {
+            auto numStart = colon + 1;
+            while (numStart < content.size() && 
+                   (content[numStart] == ' ' || content[numStart] == '\t')) {
+                ++numStart;
+            }
+            highScore = 0;
+            while (numStart < content.size() && content[numStart] >= '0' && content[numStart] <= '9') {
+                highScore = highScore * 10 + (content[numStart] - '0');
+                ++numStart;
+            }
+        }
+    }
+}
+
+void Game::saveHighScore()
+{
+    std::ofstream file(HIGH_SCORE_FILE, std::ios::trunc);
+    if (!file.is_open()) {
+        return;
+    }
+    file << "{\n";
+    file << "  \"highScore\": " << highScore << "\n";
+    file << "}\n";
+    file.close();
+}
+
+void Game::togglePause()
+{
+    if (gameOver) return;
+
+    paused = !paused;
+
+    if (paused) {
+        // Record when pause started so we can compensate the fall timer
+        pauseStartTime = Clock::now();
+    } else {
+        // Resume: shift lastFallTime forward by the pause duration
+        // so the piece doesn't immediately drop
+        auto pauseDuration = Clock::now() - pauseStartTime;
+        lastFallTime += pauseDuration;
+    }
 }
 
 void Game::run()
@@ -26,7 +91,6 @@ void Game::run()
     gameOver = false;
 
     if (!spawnPiece()) {
-        // Spawn collision at start — shouldn't happen on empty board
         gameOver = true;
     }
 
@@ -34,13 +98,12 @@ void Game::run()
     while (running) {
         handleInput();
 
-        if (!gameOver) {
+        if (!gameOver && !paused) {
             update();
         }
 
         render();
 
-        // Frame rate cap (~60 fps)
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
@@ -61,6 +124,12 @@ void Game::handleInput()
         return;
     }
 
+    // Pause toggle is available in-game and when paused
+    if (action == Action::Pause) {
+        togglePause();
+        return;
+    }
+
     // Restart is available in game-over state
     if (gameOver) {
         if (action == Action::Restart) {
@@ -69,54 +138,54 @@ void Game::handleInput()
         return;
     }
 
+    // When paused, ignore all gameplay actions
+    if (paused) {
+        return;
+    }
+
     // In-game actions
     switch (action) {
         case Action::MoveLeft: {
             currentPiece.moveLeft();
             if (!board.canPlace(currentPiece)) {
-                currentPiece.moveRight();  // revert
+                currentPiece.moveRight();
             }
             break;
         }
         case Action::MoveRight: {
             currentPiece.moveRight();
             if (!board.canPlace(currentPiece)) {
-                currentPiece.moveLeft();  // revert
+                currentPiece.moveLeft();
             }
             break;
         }
         case Action::MoveDown: {
-            // Soft drop: move down one row, add score
             currentPiece.moveDown();
             if (!board.canPlace(currentPiece)) {
-                currentPiece.moveUp();  // revert
+                currentPiece.moveUp();
                 lockPiece();
             } else {
-                score += 1;  // +1 point per soft-dropped row
+                score += 1;
             }
             break;
         }
         case Action::Rotate: {
             currentPiece.rotate();
             if (!board.canPlace(currentPiece)) {
-                // Simple wall-kick: try moving left or right by 1
                 bool kicked = false;
-                // Try left
                 currentPiece.moveLeft();
                 if (board.canPlace(currentPiece)) {
                     kicked = true;
                 } else {
-                    currentPiece.moveRight(); // revert left
-                    // Try right
+                    currentPiece.moveRight();
                     currentPiece.moveRight();
                     if (board.canPlace(currentPiece)) {
                         kicked = true;
                     } else {
-                        currentPiece.moveLeft(); // revert right
+                        currentPiece.moveLeft();
                     }
                 }
                 if (!kicked) {
-                    // Undo rotation: rotate 3 more times = back to original
                     currentPiece.rotate();
                     currentPiece.rotate();
                     currentPiece.rotate();
@@ -125,14 +194,13 @@ void Game::handleInput()
             break;
         }
         case Action::HardDrop: {
-            // Move piece down until collision, scoring 2 per row
             int dropDistance = 0;
             while (true) {
                 currentPiece.moveDown();
                 if (board.canPlace(currentPiece)) {
                     ++dropDistance;
                 } else {
-                    currentPiece.moveUp();  // revert last invalid move
+                    currentPiece.moveUp();
                     break;
                 }
             }
@@ -151,10 +219,9 @@ void Game::update()
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFallTime);
 
     if (elapsed >= fallInterval) {
-        // Try to move piece down
         currentPiece.moveDown();
         if (!board.canPlace(currentPiece)) {
-            currentPiece.moveUp();  // revert
+            currentPiece.moveUp();
             lockPiece();
         }
 
@@ -165,20 +232,20 @@ void Game::update()
 void Game::render()
 {
     if (gameOver) {
-        renderer.renderGameOver(score);
+        renderer.renderGameOver(score, highScore);
+    } else if (paused) {
+        renderer.renderPaused(board, score, highScore, lines, level);
     } else {
-        renderer.render(board, currentPiece, score, lines, level);
+        renderer.render(board, currentPiece, score, highScore, lines, level);
     }
 }
 
 bool Game::spawnPiece()
 {
-    // Random piece type
     std::uniform_int_distribution<int> dist(0, 6);
     PieceType type = static_cast<PieceType>(dist(rng));
 
-    // Spawn position: centered horizontally, at or above the top
-    int spawnX = (Board::WIDTH - 4) / 2;  // center 4-wide bounding box
+    int spawnX = (Board::WIDTH - 4) / 2;
     int spawnY = 0;
 
     currentPiece.reset(type, spawnX, spawnY);
@@ -191,26 +258,25 @@ bool Game::spawnPiece()
 
 void Game::lockPiece()
 {
-    // Lock piece into board
     board.place(currentPiece);
 
-    // Clear full lines
     int linesCleared = board.clearFullLines();
     if (linesCleared > 0) {
         score += calcScore(linesCleared);
         lines += linesCleared;
 
-        // Recalculate level and speed
         level = calcLevel();
         fallInterval = calcFallInterval();
     }
 
-    // Try to spawn next piece
     if (!spawnPiece()) {
         gameOver = true;
+        if (score > highScore) {
+            highScore = score;
+            saveHighScore();
+        }
     }
 
-    // Reset fall timer so new piece doesn't drop immediately
     lastFallTime = Clock::now();
 }
 
@@ -245,12 +311,12 @@ void Game::restart()
     score = 0;
     lines = 0;
     level = 1;
+    paused = false;
     fallInterval = calcFallInterval();
     lastFallTime = Clock::now();
     gameOver = false;
 
     if (!spawnPiece()) {
-        // Should never happen on a fresh board
         gameOver = true;
     }
 }

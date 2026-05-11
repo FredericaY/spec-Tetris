@@ -7,6 +7,7 @@
 #include "Input.h"
 #include <chrono>
 #include <random>
+#include <string>
 
 class Game {
 public:
@@ -20,7 +21,9 @@ private:
     // Game state
     bool running;
     bool gameOver;
+    bool paused;
     int score;
+    int highScore;
     int lines;
     int level;
 
@@ -29,6 +32,7 @@ private:
     using TimePoint = Clock::time_point;
     std::chrono::milliseconds fallInterval;
     TimePoint lastFallTime;
+    TimePoint pauseStartTime;          // when pause began (for resuming timer)
 
     // Core modules
     Board board;
@@ -38,6 +42,14 @@ private:
 
     // Random piece generation
     std::mt19937 rng;
+
+    // High score persistence
+    static constexpr const char* HIGH_SCORE_FILE = "tetris_highscore.json";
+    void loadHighScore();
+    void saveHighScore();
+
+    // Pause / resume
+    void togglePause();
 
     // Process player input
     void handleInput();
@@ -49,13 +61,9 @@ private:
     void render();
 
     // Spawn a new piece at the top
-    // Returns false if spawn position is blocked (game over)
     bool spawnPiece();
 
-    // Lock current piece into board, then:
-    // - Add hard drop bonus
-    // - Clear full lines and update score
-    // - Spawn next piece
+    // Lock current piece into board
     void lockPiece();
 
     // Calculate score for cleared lines
